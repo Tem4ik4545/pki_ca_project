@@ -1,0 +1,10 @@
+[project]
+dependencies = [
+  "fastapi>=0.95",
+  "uvicorn[standard]",
+  "sqlalchemy",
+  "alembic",
+  "cryptography",
+  "mysql-connector-python",
+  # … другие зависимости
+]
