@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     ROOT_CA_PASSPHRASE: str = os.getenv("ROOT_CA_PASSPHRASE", "changeit")
     ROOT_CA_CN: str = os.getenv("ROOT_CA_CN", "Root CA")
-
+    ADMIN_PASSWORD_ENC: str = os.getenv("ADMIN_PASSWORD_ENC", "")
     INTERMEDIATE_CA_NAMES: str = os.getenv("INTERMEDIATE_CA_NAMES", "")
     INT1_CA_PASSPHRASE: str = os.getenv("INT1_CA_PASSPHRASE", "changeit")
     INT1_CA_CN: str = os.getenv("INT1_CA_CN", "Intermediate CA 1")

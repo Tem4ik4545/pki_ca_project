@@ -6,54 +6,54 @@ from utils import generate_csr_and_issue, revoke_cert, get_crl
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from utils import check_ocsp_status
+from utils import verify_admin
+from utils import do_revoke_ui, fetch_crl_ui
+
 def build_ui() -> gr.Blocks:
     demo = gr.Blocks(title="Тонкий клиент PKI УЦ")
 
     with demo:
         # Заголовки
-        gr.Markdown("# Тонкий клиент Удостоверяющего Центра")
+        gr.Markdown("# Клиент Удостоверяющего Центра")
         gr.Markdown("Заполните поля и нажмите «Выпустить» — автоматически получите ключ и сертификат.")
 
         # 1. Выпуск X.509
         with gr.Tab("Выпуск X.509"):
             gr.Markdown("**Заполните все поля и нажмите «Выпустить»**")
-            cn      = gr.Textbox(label="CN (Общее имя)")
-            org     = gr.Textbox(label="Организация (O)")
-            ou      = gr.Textbox(label="Подразделение (OU)")
-            loc     = gr.Textbox(label="Город (L)")
-            state   = gr.Textbox(label="Штат/Область (ST)")
+
+            # Выбор УЦ (если нужно) — иначе можно оставить пустым для автоматического выбора
+            ca_name = gr.Dropdown(
+                choices=["", "Intermediate CA 1", "Intermediate CA 2"],
+                value="",
+                label="От какого УЦ выпускать (оставьте пустым — Root CA)"
+            )
+            cn = gr.Textbox(label="CN (Общее имя)")
+            org = gr.Textbox(label="Организация (O)")
+            ou = gr.Textbox(label="Подразделение (OU)")
+            loc = gr.Textbox(label="Город (L)")
+            state = gr.Textbox(label="Штат/Область (ST)")
             country = gr.Textbox(label="Страна (C)")
-            email   = gr.Textbox(label="Email")
-            issue_btn   = gr.Button("Выпустить")
-            key_file    = gr.File(label="Приватный ключ (PEM)")
-            cert_file   = gr.File(label="Сертификат (PEM)")
-            status_text = gr.Textbox(label="Статус", lines=2)
-            serial_text = gr.Textbox(label="Серийный номер", lines=1)
+            email = gr.Textbox(label="Email")
+            issue_btn = gr.Button("Выпустить")
+            key_file = gr.File(label="Приватный ключ (PEM)")
+            cert_file = gr.File(label="Сертификат (PEM)")
+            status = gr.Textbox(label="Статус", lines=2)
+            serial = gr.Textbox(label="Серийный номер", lines=1)
 
             def safe_issue(cn, org, ou, loc, state, country, email):
-                # Проверка на пустые поля
-                missing = [
-                    name for name, val in [
-                        ("CN", cn), ("O", org), ("OU", ou),
-                        ("L", loc), ("ST", state),
-                        ("C", country), ("Email", email)
-                    ] if not val or not str(val).strip()
-                ]
+                missing = [n for n, v in [
+                    ("CN", cn), ("O", org), ("OU", ou),
+                    ("L", loc), ("ST", state),
+                    ("C", country), ("Email", email)
+                ] if not (v and str(v).strip())]
                 if missing:
                     return None, None, f"Заполните поля: {', '.join(missing)}", ""
 
                 try:
-                    # Выпускаем и сохраняем пути к файлам
-                    key_path, cert_path = generate_csr_and_issue(
+                    key_path, cert_path, serial = generate_csr_and_issue(
                         cn, org, ou, loc, state, country, email
                     )
-
-                    # Загружаем PEM-сертификат и извлекаем serial
-                    pem = open(cert_path, "rb").read()
-                    cert_obj = x509.load_pem_x509_certificate(pem, default_backend())
-                    serial = cert_obj.serial_number
-
-                    return key_path, cert_path, "✔ Выпуск успешен", str(serial)
+                    return key_path, cert_path, "✔ Выпуск успешен", serial
 
                 except requests.HTTPError as he:
                     try:
@@ -67,84 +67,143 @@ def build_ui() -> gr.Blocks:
             issue_btn.click(
                 fn=safe_issue,
                 inputs=[cn, org, ou, loc, state, country, email],
-                outputs=[key_file, cert_file, status_text, serial_text]
+                outputs=[key_file, cert_file, status, serial]
             )
 
-        # 2. Отзыв сертификата
         with gr.Tab("Отзыв сертификата"):
-            gr.Markdown("**Введите серийный номер и причину, затем нажмите «Отозвать»**")
-            # Текстовое поле вместо Number, чтобы не терять точность длинного серийника
+            gr.Markdown("**Доступ только для администратора.**")
+            admin_pwd = gr.Textbox(label="Пароль администратора", type="password")
+            login_btn = gr.Button("Войти")
+
+            # Поля для отзыва (скрываем до авторизации)
             sn = gr.Textbox(
                 label="Серийный номер (десятичный)",
-                placeholder="Скопируйте из поля «Serial Number» вкладки «Выпуск X.509»"
+                placeholder="Скопируйте из вкладки «Выпуск X.509»",
+                visible=False
             )
-            reason = gr.Textbox(label="Причина отзыва")
-            revoke_btn = gr.Button("Отозвать")
-            revoke_output = gr.Textbox(label="Результат", lines=4)
+            reason = gr.Textbox(label="Причина отзыва", visible=False)
+            revoke_btn = gr.Button("Отозвать", visible=False)
+            # Это поле оставляем видимым (но пустым) после успешной авторизации
+            revoke_out = gr.Textbox(label="Результат операции", lines=4, visible=False)
 
-            def do_revoke(serial_str, reason):
-                serial_str = str(serial_str).strip()
-                # Проверяем, что строка состоит только из цифр
+            def unlock_revoke(pwd: str):
+                try:
+                    ok = verify_admin(pwd)
+                except Exception as e:
+                    return (
+                        gr.update(visible=False),  # sn
+                        gr.update(visible=False),  # reason
+                        gr.update(visible=False),  # revoke_btn
+                        gr.update(visible=True, value=f"❌ Ошибка проверки пароля: {e}"),  # revoke_out
+                        gr.update(visible=True, value=""),  # admin_pwd
+                        gr.update(visible=True)  # login_btn
+                    )
+                if not ok:
+                    return (
+                        gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=True, value="❌ Неверный пароль"),
+                        gr.update(visible=True, value=""),
+                        gr.update(visible=True)
+                    )
+                # успешная авторизация:
+                # показываем поля для отзыва и оставляем revoke_out видимым (пока пустым)
+                return (
+                    gr.update(visible=True),  # sn
+                    gr.update(visible=True),  # reason
+                    gr.update(visible=True),  # revoke_btn
+                    gr.update(visible=True, value=""),  # revoke_out
+                    gr.update(visible=False),  # admin_pwd
+                    gr.update(visible=False)  # login_btn
+                )
+
+            login_btn.click(
+                fn=unlock_revoke,
+                inputs=admin_pwd,
+                outputs=[sn, reason, revoke_btn, revoke_out, admin_pwd, login_btn]
+            )
+
+            def do_revoke_ui(serial_str: str, reason_str: str) -> str:
+                serial_str = serial_str.strip()
                 if not serial_str.isdigit():
-                    return "❌ Формат серийного номера неверен: допускаются только цифры."
+                    return "❌ Формат серийного номера неверен: только цифры."
                 serial = int(serial_str)
                 try:
-                    r = revoke_cert(serial, reason)
+                    r = revoke_cert(serial, reason_str)
                     return (
                         f"✔ Сертификат отозван:\n"
                         f"- Серийный номер: {r['serial_number']}\n"
-                        f"- Дата: {r['revocation_date']}\n"
+                        f"- Дата отзыва: {r['revocation_date']}\n"
                         f"- Причина: {r['reason']}"
                     )
                 except requests.HTTPError as he:
-                    # Пытаемся достать сообщение detail из JSON
                     try:
                         detail = he.response.json().get("detail", he.response.text)
-                    except Exception:
+                    except:
                         detail = he.response.text
                     return f"❌ Ошибка сервера: {detail}"
                 except Exception as e:
                     return f"❌ Непредвиденная ошибка: {e}"
 
             revoke_btn.click(
-                fn=do_revoke,
+                fn=do_revoke_ui,
                 inputs=[sn, reason],
-                outputs=revoke_output
+                outputs=[revoke_out]
             )
 
-        # 3. Получить CRL
         with gr.Tab("Получить CRL"):
-            gr.Markdown("**Нажмите «Загрузить отзывы» для получения списка отозванных сертификатов**")
-            load_btn = gr.Button("Загрузить отзывы")
+            gr.Markdown("**Доступ только для администратора.**")
+            admin_pwd2 = gr.Textbox(label="Пароль администратора", type="password")
+            login_btn2 = gr.Button("Войти")
+
+            load_btn = gr.Button("Загрузить отзывы", visible=False)
             crl_table = gr.Dataframe(
-                headers=["serial_number", "revocation_date", "reason"],
+                headers=["Серийный номер", "Дата отзыва", "Причина"],
                 datatype=["str", "str", "str"],
                 row_count=(0, None),
                 col_count=3,
                 interactive=False,
-                label="Список отзывов"
+                label="Список отозванных сертификатов",
+                visible=False
+            )
+            msg_crl = gr.Textbox(label="", visible=False)
+
+            def unlock_crl(pwd):
+                try:
+                    ok = verify_admin(pwd)
+                except Exception as e:
+                    return (
+                        gr.update(visible=False),  # load_btn
+                        gr.update(visible=False),  # crl_table
+                        gr.update(visible=True, value=f"❌ Ошибка проверки пароля: {e}"),  # msg_crl
+                        gr.update(visible=True, value=""),  # admin_pwd2 очистить
+                        gr.update(visible=True)  # login_btn2
+                    )
+                if not ok:
+                    return (
+                        gr.update(visible=False),
+                        gr.update(visible=False),
+                        gr.update(visible=True, value="❌ Неверный пароль"),
+                        gr.update(visible=True, value=""),
+                        gr.update(visible=True)
+                    )
+                return (
+                    gr.update(visible=True),  # load_btn
+                    gr.update(visible=True),  # crl_table
+                    gr.update(visible=False),  # msg_crl
+                    gr.update(visible=False),  # admin_pwd2
+                    gr.update(visible=False)  # login_btn2
+                )
+
+            login_btn2.click(
+                fn=unlock_crl,
+                inputs=admin_pwd2,
+                outputs=[load_btn, crl_table, msg_crl, admin_pwd2, login_btn2]
             )
 
-            def fetch_crl_list():
-                """
-                Вызывает API /crl и преобразует ответ List[dict] в формат List[List],
-                пригодный для отображения в gr.Dataframe:
-                    [
-                        [serial_number, revocation_date, reason],
-                        …
-                    ]
-                """
-                data = get_crl() or []
-                table = []
-                for entry in data:
-                    serial = entry.get("serial_number", "")
-                    date = entry.get("revocation_date", "")
-                    reason = entry.get("reason", "")
-                    table.append([serial, date, reason])
-                return table
-
             load_btn.click(
-                fn=fetch_crl_list,
+                fn=fetch_crl_ui,
                 inputs=None,
                 outputs=crl_table
             )

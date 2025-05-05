@@ -6,7 +6,7 @@ from .core.config import settings
 from .db.engine import engine
 from .db.models import Base
 from .core.security import init_security
-
+from server.api.auth.routes import router as auth_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -20,7 +20,7 @@ app = FastAPI(
 )
 
 app.include_router(api_router, prefix=settings.API_PREFIX)
-
+app.include_router(auth_router)
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "ok"}

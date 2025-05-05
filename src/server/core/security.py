@@ -88,16 +88,26 @@ def init_security() -> None:
         logger.info("Intermediate CA initialized: %s", ica_cn)
 
 
-def get_issuer() -> tuple[x509.Certificate, serialization.PrivateFormat]:
+def get_issuer(ca_name: str | None = None) -> tuple[x509.Certificate, serialization.PrivateFormat]:
     """
-    Возвращает кортеж (issuer_cert, issuer_key) для подписи end-entity CSR.
-    Выбирает первый Intermediate CA, если он задан, иначе возвращает Root CA.
+    Возвращает (issuer_cert, issuer_key) для подписания end-entity CSR.
+    Если передано ca_name, ищет именно его, иначе — первый Intermediate или Root.
     """
-    # Попробуем первый из промежуточных
-    for name in settings.INTERMEDIATE_CA_NAMES.split(","):
-        name = name.strip()
-        if name and name in _intermediate_certs:
-            return _intermediate_certs[name], _intermediate_keys[name]
+    # Явный выбор
+    if ca_name:
+        name = ca_name.strip().lower()
+        if name == "root":
+            return _root_cert, _root_key
+        for inter_name, inter_cert in _intermediate_certs.items():
+            if inter_name.lower() == name:
+                return inter_cert, _intermediate_keys[inter_name]
+        raise RuntimeError(f"Unknown CA '{ca_name}'")
 
-    # Иначе – корневой
+    # По умолчанию — первый Intermediate (если есть)
+    for inter_name in settings.INTERMEDIATE_CA_NAMES.split(","):
+        n = inter_name.strip()
+        if n and n in _intermediate_certs:
+            return _intermediate_certs[n], _intermediate_keys[n]
+
+    # Иначе — Root
     return _root_cert, _root_key

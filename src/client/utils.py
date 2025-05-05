@@ -2,12 +2,54 @@ import os
 import tempfile
 import requests
 from cryptography import x509
+from cryptography.hazmat.backends import default_backend
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.ocsp import OCSPRequestBuilder, load_der_ocsp_response
 API_PREFIX = os.getenv("API_PREFIX", "/api/v1")
 BASE_URL   = f"http://localhost:8000{API_PREFIX}"
+
+
+
+
+
+def verify_admin(password: str):
+    resp = requests.post(f"{BASE_URL}/admin/login", json={"password": password})
+    return resp.status_code == 200
+def do_revoke_ui(serial_str, reason_str):
+    serial_str = serial_str.strip()
+    if not serial_str.isdigit():
+        return "❌ Формат серийного номера неверен: только цифры."
+    serial = int(serial_str)
+    try:
+        r = revoke_cert(serial, reason_str)
+        return (
+            f"✔ Сертификат отозван:\n"
+            f"- Серийный номер: {r['serial_number']}\n"
+            f"- Дата отзыва: {r['revocation_date']}\n"
+            f"- Причина: {r['reason']}"
+        )
+    except requests.HTTPError as he:
+        try:
+            detail = he.response.json().get("detail", he.response.text)
+        except:
+            detail = he.response.text
+        return f"❌ Ошибка сервера: {detail}"
+    except Exception as e:
+        return f"❌ Непредвиденная ошибка: {e}"
+
+
+def fetch_crl_ui() -> list[list[str]]:
+    data = get_crl() or []
+    return [
+        [
+            entry.get("serial_number", ""),
+            entry.get("revocation_date", ""),
+            entry.get("reason", ""),
+        ]
+        for entry in data
+    ]
 
 def generate_csr_and_issue(
     common_name: str,
@@ -17,28 +59,35 @@ def generate_csr_and_issue(
     state: str,
     country: str,
     email: str
-) -> tuple[str, str]:
-    # Генерация ключа
+) -> tuple[str, str, str]:
+    # 1) Генерация ключа
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    # Составление subject
+
+    # 2) Составление CSR
     subject = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, organization),
-        x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, organizational_unit),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, locality),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, state),
-        x509.NameAttribute(NameOID.COUNTRY_NAME, country),
-        x509.NameAttribute(NameOID.EMAIL_ADDRESS, email),
+        x509.NameAttribute(x509.NameOID.COMMON_NAME, common_name),
+        x509.NameAttribute(x509.NameOID.ORGANIZATION_NAME, organization),
+        x509.NameAttribute(x509.NameOID.ORGANIZATIONAL_UNIT_NAME, organizational_unit),
+        x509.NameAttribute(x509.NameOID.LOCALITY_NAME, locality),
+        x509.NameAttribute(x509.NameOID.STATE_OR_PROVINCE_NAME, state),
+        x509.NameAttribute(x509.NameOID.COUNTRY_NAME, country),
+        x509.NameAttribute(x509.NameOID.EMAIL_ADDRESS, email),
     ])
-
-    csr = x509.CertificateSigningRequestBuilder().subject_name(subject).sign(key, hashes.SHA256())
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(subject)
+        .sign(key, hashes.SHA256(), default_backend())
+    )
     csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode()
-    # Отправка CSR в CA
-    resp = requests.post(f"{BASE_URL}/csr", json={"csr_pem": csr_pem})
+
+    # 3) Отправка CSR в /issue
+    resp = requests.post(f"{BASE_URL}/issue", json={"csr_pem": csr_pem})
     resp.raise_for_status()
-    cert_pem = resp.json()["certificate_pem"]
+    data = resp.json()
+    cert_pem = data["certificate_pem"]
+    serial   = str(data["serial_number"])
 
-
+    # 4) Сохранение приватного ключа
     key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
     key_file.write(key.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -47,13 +96,12 @@ def generate_csr_and_issue(
     ))
     key_file.close()
 
-
+    # 5) Сохранение сертификата
     cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
     cert_file.write(cert_pem.encode())
     cert_file.close()
 
-    return key_file.name, cert_file.name
-
+    return key_file.name, cert_file.name, serial
 def revoke_cert(serial: int, reason: str) -> dict:
     resp = requests.post(
         f"{BASE_URL}/revoke",

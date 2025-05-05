@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from .engine import SessionLocal
 from .models import ActiveCertificate, RevokedCertificate
-
+from ..core.security import get_issuer
+from ..crypto.certs import issue_certificate_from_csr
 
 from cryptography.hazmat.primitives import serialization
 
@@ -19,33 +20,40 @@ class CertificateRepository:
             db.close()
 
     @classmethod
-    def issue(cls, csr_pem: str, db: Session) -> ActiveCertificate:
+    def issue(
+            cls,
+            csr_pem: str,
+            ca_name: str | None,
+            db: Session
+    ) -> ActiveCertificate:
         """
-        Принимаем CSR в PEM, подписываем, сохраняем в ActiveCertificate и возвращаем запись.
+        Выпускает новый сертификат из CSR, подписывает выбранным CA (по имени ca_name или по умолчанию),
+        сохраняет в БД и возвращает ORM-объект ActiveCertificate.
         """
+        # выбираем нужный CA
+        issuer_cert, issuer_key = get_issuer(ca_name)
 
-        from server.core.security import get_issuer
-        issuer_cert, issuer_key = get_issuer()
+        # генерируем сертификат
+        cert = issue_certificate_from_csr(csr_pem=csr_pem, issuer_cert=issuer_cert, issuer_key=issuer_key)
 
-
-        from server.crypto.certs import issue_certificate_from_csr
-        cert = issue_certificate_from_csr(csr_pem, issuer_cert, issuer_key)
-
-
-        cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
-        new_cert = ActiveCertificate(
+        # сохраняем в базу
+        db_obj = ActiveCertificate(
             serial_number=str(cert.serial_number),
             subject=cert.subject.rfc4514_string(),
-            issuer=cert.issuer.rfc4514_string(),
+            issuer=issuer_cert.subject.rfc4514_string(),
             not_before=cert.not_valid_before_utc,
             not_after=cert.not_valid_after_utc,
-            certificate_pem=cert_pem,
+            public_key=cert.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ),
+            certificate_pem=cert.public_bytes(serialization.Encoding.PEM).decode(),
             status="active"
         )
-        db.add(new_cert)
+        db.add(db_obj)
         db.commit()
-        db.refresh(new_cert)
-        return new_cert
+        db.refresh(db_obj)
+        return db_obj
 
     @staticmethod
     def revoke(serial_number, reason: str, db: Session) -> RevokedCertificate:
