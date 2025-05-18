@@ -91,9 +91,11 @@ def init_security() -> None:
 def get_issuer(ca_name: str | None = None) -> tuple[x509.Certificate, serialization.PrivateFormat]:
     """
     Возвращает (issuer_cert, issuer_key) для подписания end-entity CSR.
-    Если передано ca_name, ищет именно его, иначе — первый Intermediate или Root.
+    Если передано ca_name:
+        - "root" => Root CA
+        - имя из INTERMEDIATE_CA_NAMES => соответствующий Intermediate CA
+    Если не передано — используется Root CA.
     """
-    # Явный выбор
     if ca_name:
         name = ca_name.strip().lower()
         if name == "root":
@@ -103,11 +105,5 @@ def get_issuer(ca_name: str | None = None) -> tuple[x509.Certificate, serializat
                 return inter_cert, _intermediate_keys[inter_name]
         raise RuntimeError(f"Unknown CA '{ca_name}'")
 
-    # По умолчанию — первый Intermediate (если есть)
-    for inter_name in settings.INTERMEDIATE_CA_NAMES.split(","):
-        n = inter_name.strip()
-        if n and n in _intermediate_certs:
-            return _intermediate_certs[n], _intermediate_keys[n]
-
-    # Иначе — Root
+    # По умолчанию — Root CA
     return _root_cert, _root_key

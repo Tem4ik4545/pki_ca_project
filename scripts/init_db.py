@@ -40,4 +40,4 @@ class Settings:
     INT_KEY_DIR = os.getenv("INT_KEY_DIR", "data/keys/intermediate")
 
 # Экземпляр настроек
-ttings = Settings()
+settings = Settings()

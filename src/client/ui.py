@@ -23,9 +23,9 @@ def build_ui() -> gr.Blocks:
 
             # Выбор УЦ (если нужно) — иначе можно оставить пустым для автоматического выбора
             ca_name = gr.Dropdown(
-                choices=["", "Intermediate CA 1", "Intermediate CA 2"],
+                choices=["", "int1", "int2"],
                 value="",
-                label="От какого УЦ выпускать (оставьте пустым — Root CA)"
+                label="Выберите УЦ (оставьте пустым — Root CA)"
             )
             cn = gr.Textbox(label="CN (Общее имя)")
             org = gr.Textbox(label="Организация (O)")
@@ -40,7 +40,7 @@ def build_ui() -> gr.Blocks:
             status = gr.Textbox(label="Статус", lines=2)
             serial = gr.Textbox(label="Серийный номер", lines=1)
 
-            def safe_issue(cn, org, ou, loc, state, country, email):
+            def safe_issue(ca_name_value, cn, org, ou, loc, state, country, email):
                 missing = [n for n, v in [
                     ("CN", cn), ("O", org), ("OU", ou),
                     ("L", loc), ("ST", state),
@@ -51,7 +51,7 @@ def build_ui() -> gr.Blocks:
 
                 try:
                     key_path, cert_path, serial = generate_csr_and_issue(
-                        cn, org, ou, loc, state, country, email
+                        cn, org, ou, loc, state, country, email, ca_name_value
                     )
                     return key_path, cert_path, "✔ Выпуск успешен", serial
 
@@ -66,7 +66,7 @@ def build_ui() -> gr.Blocks:
 
             issue_btn.click(
                 fn=safe_issue,
-                inputs=[cn, org, ou, loc, state, country, email],
+                inputs=[ca_name, cn, org, ou, loc, state, country, email],
                 outputs=[key_file, cert_file, status, serial]
             )
 

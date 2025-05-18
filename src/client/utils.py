@@ -58,7 +58,8 @@ def generate_csr_and_issue(
     locality: str,
     state: str,
     country: str,
-    email: str
+    email: str,
+    ca_name: str | None = None
 ) -> tuple[str, str, str]:
     # 1) Генерация ключа
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -80,12 +81,15 @@ def generate_csr_and_issue(
     )
     csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode()
 
-    # 3) Отправка CSR в /issue
-    resp = requests.post(f"{BASE_URL}/issue", json={"csr_pem": csr_pem})
+    payload = {"csr_pem": csr_pem}
+    if ca_name and ca_name.strip():
+        payload["ca_name"] = ca_name
+
+    resp = requests.post(f"{BASE_URL}/issue", json=payload)
     resp.raise_for_status()
     data = resp.json()
     cert_pem = data["certificate_pem"]
-    serial   = str(data["serial_number"])
+    serial = str(data["serial_number"])
 
     # 4) Сохранение приватного ключа
     key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
