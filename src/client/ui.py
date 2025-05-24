@@ -2,12 +2,14 @@
 
 import requests
 import gradio as gr
-from utils import generate_csr_and_issue, revoke_cert, get_crl
+from utils import generate_csr_and_issue, revoke_cert, get_crl, get_issuer_pubkey
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from utils import check_ocsp_status
 from utils import verify_admin
 from utils import do_revoke_ui, fetch_crl_ui
+
+
 
 def build_ui() -> gr.Blocks:
     demo = gr.Blocks(title="Тонкий клиент PKI УЦ")
@@ -208,58 +210,102 @@ def build_ui() -> gr.Blocks:
                 outputs=crl_table
             )
 
-        # 4. OCSP-резондер
-        with gr.Tab("OCSP-проверка"):
-            gr.Markdown("**Проверить статус сертификата через OCSP**\n\n"
-                        "Загрузите оба PEM-файла: ваш сертификат и сертификат CA-издателя.")
-            user_cert   = gr.File(label="Ваш сертификат (PEM)", file_types=[".pem"])
-            issuer_cert = gr.File(label="Сертификат издателя (PEM)", file_types=[".pem"])
-            btn         = gr.Button("Проверить статус")
-            out_text    = gr.Textbox(label="Результат OCSP-запроса", lines=6)
+        # 4. OCSP проверка
+        with gr.Tab("OCSP проверка"):
+            gr.Markdown("**Введите серийный номер и узнайте статус сертификата**")
 
-            def do_ocsp(user_file, issuer_file):
+            with gr.Row():
+                serial_input = gr.Textbox(label="Серийный номер", placeholder="например: 1234567890")
+                check_btn = gr.Button("Проверить")
+
+            status_output = gr.Textbox(label="Статус", lines=1)
+            issuer_output = gr.Textbox(label="Кто выпускал", lines=1)
+            pubkey_output = gr.Textbox(label="Публичный ключ УЦ (PEM)", lines=4)
+            sig_output = gr.Textbox(label="Подпись ответа (base64)", lines=3)
+
+            def run_ocsp_check(serial_number):
                 try:
-                    # читаем байты
-                    user_pem   = user_file.read()   if hasattr(user_file, "read")   else open(user_file, "rb").read()
-                    issuer_pem = issuer_file.read() if hasattr(issuer_file, "read") else open(issuer_file, "rb").read()
-
-                    res = check_ocsp_status(user_pem, issuer_pem)
-
-                    lines = [
-                        f"Статус: {res['status']}",
-                        f"Последнее обновление: {res['this_update']}",
-                        f"Следующая проверка: {res['next_update']}"
-                    ]
-                    if res["status"] == "REVOKED":
-                        lines += [
-                            f"Отозвано: {res['revocation_time']}",
-                            f"Причина: {res['revocation_reason']}"
-                        ]
-                    return "\n".join(lines)
+                    result = check_ocsp_status(serial_number.strip())
+                    return (
+                        result.get("status", "неизвестно"),
+                        result.get("issuer", ""),
+                        result.get("issuer_public_key", ""),
+                        result.get("signature", "")
+                    )
                 except Exception as e:
-                    return f"Ошибка OCSP-проверки: {e}"
+                    return (f"❌ Ошибка: {e}", "", "", "")
 
-            btn.click(
-                fn=do_ocsp,
-                inputs=[user_cert, issuer_cert],
-                outputs=out_text
+            check_btn.click(
+                fn=run_ocsp_check,
+                inputs=[serial_input],
+                outputs=[status_output, issuer_output, pubkey_output, sig_output]
+            )
+            gr.Markdown("**Получить публичный ключ любого УЦ:**")
+
+            issuer_select = gr.Dropdown(
+                choices=["Root CA", "Intermediate CA 1", "Intermediate CA 2"],
+                label="Выберите УЦ"
+            )
+            show_btn = gr.Button("Получить ключ")
+            hide_btn = gr.Button("Скрыть ключ", visible=False)
+
+            issuer_key_output = gr.Textbox(label="Публичный ключ УЦ (PEM)", lines=6, visible=False)
+
+            def show_issuer_pubkey(issuer_choice):
+                try:
+                    key = get_issuer_pubkey(issuer_choice)
+                    return key, gr.update(visible=True), gr.update(visible=True)
+                except Exception as e:
+                    return f"❌ Ошибка: {e}", gr.update(visible=True), gr.update(visible=False)
+
+            def hide_issuer_key():
+                return gr.update(visible=False), gr.update(visible=False)
+
+            # Показать ключ
+            show_btn.click(
+                fn=show_issuer_pubkey,
+                inputs=[issuer_select],
+                outputs=[issuer_key_output, issuer_key_output, hide_btn]
             )
 
-        # 5. Руководство
+            # Скрыть ключ
+            hide_btn.click(
+                fn=hide_issuer_key,
+                inputs=None,
+                outputs=[issuer_key_output, hide_btn]
+            )
+
+            # 5. Руководство
         with gr.Tab("Руководство"):
             gr.Markdown("""
-**1. Выпуск X.509**  
-Заполните поля и нажмите **«Выпустить»**.  
-Если какие-то поля не заполнены — вы увидите подсказку.
+        ## Руководство по использованию
 
-**2. Отзыв сертификата**  
-Введите серийный номер (скопируйте из поля «Serial Number» вкладки «Выпуск X.509») и причину, нажмите **«Отозвать»**.
+        **1. Выпуск сертификата X.509**  
+        Перейдите во вкладку **«Выпуск X.509»**, заполните поля (CN, организация, email и т.д.) и нажмите кнопку **«Выпустить»**.  
+        После этого отобразится сгенерированный сертификат и приватный ключ.  
+        Также вы увидите его серийный номер — сохраните его, он нужен для отзыва или проверки.
 
-**3. CRL**  
-Нажмите **«Загрузить CRL»** — получите список отозванных сертификатов.
+        **2. Отзыв сертификата**  
+        Введите пароль админа.
+        Введите серийный номер сертификата и причину отзыва, нажмите **«Отозвать»**.  
+        Вы получите подтверждение отзыва.
 
-**4. OCSP**  
-Загрузите файл запроса DER, нажмите **«Отправить запрос»** — скачайте ответ DER.
-            """)
+        **3. Список отозванных сертификатов (CRL)**
+        Введите пароль админа.
+        Нажмите кнопку **«Загрузить CRL»**, чтобы получить таблицу всех отозванных сертификатов с причинами и датами.
+
+        **4. Проверка статуса сертификата (OCSP)**  
+        Во вкладке **«OCSP проверка»** введите серийный номер сертификата и нажмите **«Проверить»**.  
+        Вы увидите:
+        - Статус: `good`, `revoked` или `unknown`
+        - Кто выдал сертификат
+        - Публичный ключ УЦ
+        - Цифровую подпись ответа
+        Ещё можно получить публичные ключи каждого из УЦ:
+        Выберите УЦ, ключ которого хотите получить.
+        Нажмите кнопку **«Получить ключ»**.
+        Можете скрыть ключ нажатием на кнопку.
+
+                    """)
 
     return demo

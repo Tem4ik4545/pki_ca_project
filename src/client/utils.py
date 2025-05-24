@@ -133,40 +133,13 @@ def build_ocsp_request(cert_pem: bytes, issuer_pem: bytes) -> bytes:
     )
     return builder.build().public_bytes(serialization.Encoding.DER)
 
-def check_ocsp_status(cert_pem: bytes, issuer_pem: bytes) -> dict:
-    """
-    Генерирует OCSPRequest, шлёт его на сервер,
-    парсит OCSPResponse и возвращает:
-      {
-        "status": "GOOD"|"REVOKED"|"UNKNOWN",
-        "this_update": "...",
-        "next_update": "...",
-        "revocation_time": "...",        # или ""
-        "revocation_reason": "..."       # или ""
-      }
-    """
-    der_req = build_ocsp_request(cert_pem, issuer_pem)
-
-    resp = requests.post(
-        f"{BASE_URL}/ocsp",
-        data=der_req,
-        headers={"Content-Type": "application/ocsp-request"}
-    )
+def check_ocsp_status(serial_number: str) -> dict:
+    resp = requests.post(f"{BASE_URL}/ocsp", json={"serial_number": serial_number})
     resp.raise_for_status()
+    return resp.json()
 
-    ocsp_resp = load_der_ocsp_response(resp.content)
-    single   = ocsp_resp.responses[0]
+def get_issuer_pubkey(issuer_name: str) -> str:
+    resp = requests.get(f"{BASE_URL}/ocsp/issuer-key/{issuer_name}")
+    resp.raise_for_status()
+    return resp.text
 
-    return {
-        "status": single.cert_status.name,
-        "this_update": single.this_update.isoformat(),
-        "next_update": single.next_update.isoformat(),
-        "revocation_time": (
-            single.revocation_time.isoformat()
-            if single.revocation_time else ""
-        ),
-        "revocation_reason": (
-            single.revocation_reason.name
-            if single.revocation_reason else ""
-        )
-    }
