@@ -178,18 +178,18 @@ UI-интерфейс:
 
 Запуск:
 uvicorn src.server.main:app --reload
-python src/client/ui.py
+python src/client/app.py
 
 Требования:
 - Python 3.11+
 - FastAPI, Cryptography, Gradio
 
-Переменные окружения:
-- ROOT_CA_PASSPHRASE=...
-- INT1_CA_PASSPHRASE=...
-- INT2_CA_PASSPHRASE=...
-- ADMIN_AES_KEY_B64=...
-- ADMIN_PASSWORD_ENC=...
+Требуется файл .env с переменными:
+- ROOT_CA_PASSPHRASE
+- INT1_CA_PASSPHRASE
+- INT2_CA_PASSPHRASE
+- ADMIN_AES_KEY_B64
+- ADMIN_PASSWORD_ENC
 
 Стандарты:
 - RFC 5280 — структура X.509
