@@ -137,9 +137,15 @@ def check_ocsp_status(serial_number: str) -> dict:
     resp = requests.post(f"{BASE_URL}/ocsp", json={"serial_number": serial_number})
     resp.raise_for_status()
     return resp.json()
-
+CERTS = {
+    "CN=Root CA": "data/certs/root_ca_cert.pem",
+    "CN=Intermediate CA 1": "data/certs/CN_Intermediate CA 1_cert.pem",
+    "CN=Intermediate CA 2": "data/certs/CN_Intermediate CA 2_cert.pem"
+}
 def get_issuer_pubkey(issuer_name: str) -> str:
-    resp = requests.get(f"{BASE_URL}/ocsp/issuer-key/{issuer_name}")
+    import urllib.parse
+    encoded = urllib.parse.quote_plus(issuer_name)
+    resp = requests.get(f"{BASE_URL}/ocsp/issuer-key/{encoded}")
     resp.raise_for_status()
     return resp.text
 

@@ -19,7 +19,6 @@ async def check_ocsp_status(request: OCSPRequest):
     if result is None:
         raise HTTPException(status_code=404, detail="Сертификат не найден")
     return result
-
 @router.get("/issuer-key/{issuer_name}", response_class=PlainTextResponse)
 def get_issuer_pubkey(issuer_name: str):
     CERTS = {
@@ -28,7 +27,7 @@ def get_issuer_pubkey(issuer_name: str):
         "Intermediate CA 2": "data/certs/CN_Intermediate CA 2_cert.pem"
     }
 
-    decoded_name = urllib.parse.unquote(issuer_name)
+    decoded_name = urllib.parse.unquote_plus(issuer_name)
     path = CERTS.get(decoded_name)
 
     if not path or not os.path.isfile(path):
@@ -39,4 +38,4 @@ def get_issuer_pubkey(issuer_name: str):
         return cert.public_key().public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
-        ).decode()
+        ).decode("utf-8")

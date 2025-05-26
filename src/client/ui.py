@@ -210,7 +210,6 @@ def build_ui() -> gr.Blocks:
                 outputs=crl_table
             )
 
-        # 4. OCSP проверка
         with gr.Tab("OCSP проверка"):
             gr.Markdown("**Введите серийный номер и узнайте статус сертификата**")
 
@@ -240,6 +239,7 @@ def build_ui() -> gr.Blocks:
                 inputs=[serial_input],
                 outputs=[status_output, issuer_output, pubkey_output, sig_output]
             )
+
             gr.Markdown("**Получить публичный ключ любого УЦ:**")
 
             issuer_select = gr.Dropdown(
@@ -261,14 +261,12 @@ def build_ui() -> gr.Blocks:
             def hide_issuer_key():
                 return gr.update(visible=False), gr.update(visible=False)
 
-            # Показать ключ
             show_btn.click(
                 fn=show_issuer_pubkey,
                 inputs=[issuer_select],
                 outputs=[issuer_key_output, issuer_key_output, hide_btn]
             )
 
-            # Скрыть ключ
             hide_btn.click(
                 fn=hide_issuer_key,
                 inputs=None,

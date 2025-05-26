@@ -13,18 +13,17 @@ from server.db.models import ActiveCertificate, RevokedCertificate
 CERTS_DIR = os.getenv("CERTS_DIR", "data/certs")
 KEYS_DIR = os.getenv("KEYS_DIR", "data/keys")
 
-
+ISSUER_CERTS = {
+    "CN=Root CA": "data/certs/root_ca_cert.pem",
+    "CN=Intermediate CA 1": "data/certs/CN_Intermediate CA 1_cert.pem",
+    "CN=Intermediate CA 2": "data/certs/CN_Intermediate CA 2_cert.pem",
+}
 def load_cert_by_issuer(issuer: str):
-    """
-    Ищет подходящий PEM-сертификат по issuer (например, CN=Intermediate CA 1).
-    """
-    normalized = issuer.replace("CN=", "").strip().replace(" ", "_")
-    for name in os.listdir(CERTS_DIR):
-        if normalized.replace("_", "").lower() in name.replace("_", "").lower():
-            with open(os.path.join(CERTS_DIR, name), "rb") as f:
-                return load_pem_x509_certificate(f.read())
-    return None
-
+    path = ISSUER_CERTS.get(issuer)
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        return load_pem_x509_certificate(f.read())
 
 
 
